@@ -5,6 +5,41 @@ const jsdom = require('jsdom');
 const { JSDOM } = jsdom;
 const constants = require('../constants');
 
+const text = (element) => element?.textContent.replace(/\s+/g, ' ').trim() || '';
+
+// Selectors observed on live TudoGostoso pages on 2026-11-04.
+function parseCurrentRecipe(doc) {
+  const root = doc.querySelector('.recipe-ingredients');
+  if (!root) return null;
+  const groups = root.querySelectorAll(':scope > section');
+  const ingredients = [...(groups.length ? groups : [root])].map((group) => ({
+    title: text(group.querySelector('.recipe-ingredients-subtitle')) || 'default',
+    items: [...group.querySelectorAll('.recipe-ingredients-item-label')].map(text),
+  }));
+  const instructions = [];
+  for (const step of doc.querySelectorAll('.recipe-steps-item')) {
+    const title = text(step.querySelector('.recipe-steps-title'));
+    if (title || !instructions.length) instructions.push({ title: title || 'default', items: [] });
+    const item = text(step.querySelector('.recipe-steps-text'));
+    if (item) instructions[instructions.length - 1].items.push(item);
+  }
+  const additional = [...doc.querySelectorAll('.recipe-advice-content p')].map(text).filter(Boolean);
+  if (additional.length) instructions.push({ title: 'Informações Adicionais', items: additional });
+  const stats = extractStats(doc);
+  const duration = text(doc.querySelector('.recipe-info-item'));
+  const hours = duration.match(/(\d+)\s*h/);
+  const minutes = duration.match(/(\d+)\s*min/);
+  if (hours || minutes) stats.prepare_time_minutes = Number(hours?.[1] || 0) * 60 + Number(minutes?.[1] || 0);
+  const portions = text(root.querySelector('h2')).match(/\((\d+)\s*porç/);
+  if (portions) stats.portion_output = Number(portions[1]);
+  const title = text(doc.querySelector('h1'));
+  if (!title || !ingredients.some((s) => s.items.length) ||
+      !doc.querySelector('.recipe-steps-text')) {
+    throw { code: 502, message: 'Incomplete TudoGostoso recipe HTML' };
+  }
+  return { title, stats, ingredients, instructions };
+}
+
 function extractRecipeID(link) {
   const regex = /\/receita\/(\S+).html/gm;
   let m; let recipeId;
@@ -24,7 +59,7 @@ function parseItems(title, element, identifier) {
   const section = { title, items: [] };
   let items = element.querySelectorAll(identifier);
   if (items.length === 0) {
-    items = element.nextElementSibling.querySelectorAll(identifier);
+    items = element.nextElementSibling?.querySelectorAll(identifier) || [];
   }
   items.forEach((item) => {
     if (item != null) { section.items = section.items.concat(item.textContent); }
@@ -66,7 +101,7 @@ function extractInstructions(doc) {
     let section;
 
     const subtitles = instruction.querySelectorAll('.card-subtitle');
-    if (subtitles.length <= 1) {
+    if (subtitles.length === 0) {
       section = parseItems(title, instruction, 'ol li span');
       instructionsSections = instructionsSections.concat(section);
     }
@@ -113,13 +148,27 @@ function extractStats(doc) {
 }
 
 function extractTitle(doc) {
-  return doc.querySelector('div.recipe-title h1').textContent.replace(/\n/g, '');
+  return doc.querySelector('div.recipe-title h1')?.textContent.replace(/\n/g, '').trim();
 }
 
 module.exports = {
   parseRecipesList(str) {
     const dom = new JSDOM(str);
     const doc = dom.window.document;
+
+    const listing = doc.querySelector('.news-card-listing');
+    const currentLinks = listing?.querySelectorAll('a.news-card-link[href*="/receita/"]');
+    if (currentLinks?.length) {
+      const results = [...currentLinks].map((link) => ({
+        title: link.getAttribute('aria-label')?.trim() || text(link),
+        id: extractRecipeID(link.href),
+      })).filter((recipe) => recipe.id && recipe.title);
+      if (!results.length) throw { code: 502, message: 'Could not extract recipes' };
+      return results.slice(0, constants.max_recipes_returned);
+    }
+    if (listing && /Nenhum resultado/i.test(text(listing))) {
+      throw constants.errors.recipes_search_not_found;
+    }
 
     if (doc.querySelectorAll('.no-results').length > 0) {
       return new Promise((resolve, reject) => {
@@ -130,11 +179,11 @@ module.exports = {
     const recipes = doc.querySelectorAll('.recipe-card');
     const maxRecipes = constants.max_recipes_returned;
     let retRecipes = [];
-    for (let i = 0; i < maxRecipes; i += 1) {
+    for (let i = 0; i < Math.min(maxRecipes, recipes.length); i += 1) {
       const titles = recipes[i].querySelectorAll('.title');
       const links = recipes[i].querySelectorAll('.link');
 
-      if (titles.length > 0 && links.length > 0) {
+      if (titles.length > 0 && links.length > 0 && extractRecipeID(links[0].href)) {
         const title = titles[0].textContent;
         const link = links[0].href;
 
@@ -144,21 +193,34 @@ module.exports = {
         });
       }
     }
+    if (recipes.length === 0) {
+      throw { code: 502, message: 'Unrecognized TudoGostoso search HTML' };
+    }
+    if (retRecipes.length === 0) throw { code: 502, message: 'Could not extract recipes' };
     return retRecipes;
   },
   parseRecipe(str) {
     const dom = new JSDOM(str);
     const doc = dom.window.document;
 
+    const current = parseCurrentRecipe(doc);
+    if (current) return current;
+
     if (doc.body.innerHTML.includes('redirected')) {
       return new Promise((resolve, reject) => { reject(constants.errors.get_recipe_not_found); });
     }
 
+    const title = extractTitle(doc);
+    const ingredients = extractIngredients(doc);
+    const instructions = extractInstructions(doc);
+    if (!title || !ingredients.some((s) => s.items.length) || !instructions.some((s) => s.items.length)) {
+      throw { code: 502, message: 'Unrecognized TudoGostoso recipe HTML' };
+    }
     return {
-      title: extractTitle(doc),
+      title,
       stats: extractStats(doc),
-      ingredients: extractIngredients(doc),
-      instructions: extractInstructions(doc),
+      ingredients,
+      instructions,
     };
   },
 };

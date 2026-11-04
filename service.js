@@ -1,25 +1,15 @@
-/* eslint-disable no-param-reassign */
 const scrapper = require('./tools/scrapper');
 const request = require('./tools/request');
 
 module.exports = {
   async search(searchStr) {
-    searchStr = searchStr.replace(/ /g, '+');
-    let res;
-    await request.searchRecipes(searchStr)
-      .then((resp) => {
-        res = scrapper.parseRecipesList(resp);
-      })
-      .catch((err) => err);
-    return res;
+    if (!searchStr.trim()) throw { code: 400, message: 'Search name is required' };
+    return scrapper.parseRecipesList(await request.searchRecipes(searchStr));
   },
   async get_recipe(id) {
-    let res;
-    await request.getRecipeByID(id)
-      .then((resp) => {
-        res = scrapper.parseRecipe(resp);
-      })
-      .catch((err) => err);
-    return res;
+    if (!/^\d+(?:-[\p{L}\p{N}_-]+)?$/u.test(id)) {
+      throw { code: 400, message: 'Invalid recipe id' };
+    }
+    return scrapper.parseRecipe(await request.getRecipeByID(id));
   },
 };
