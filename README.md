@@ -6,9 +6,55 @@ Atualmente é possível pesquisar e visualizar receitas.
 
 ## Como rodar
 
-`npm start`
+Requer Node.js 22 ou superior (Render configurado para Node.js 24). Não exige API Key.
 
-O serviço roda sobre o *nodemon*, ou seja, irá reinicializar sozinho a cada vez que for alterado ou for interrompido devido a erros internos.
+```sh
+npm ci
+npm test
+npm start
+```
+
+Produção executa `node index.js`. Para desenvolvimento com reinicialização automática, use `npm run dev`.
+O Express escuta em `0.0.0.0`, na porta `process.env.PORT || 3000`.
+
+## Hospedagem gratuita no Render
+
+1. Faça merge do PR em `main` e conecte este repositório ao Render.
+2. Crie um **Blueprint** selecionando o repositório e a branch `main`. O arquivo `render.yaml` cria um Web Service Node.js no plano `free`.
+3. Alternativamente, crie um Web Service manual: build `npm ci --omit=dev`, start `npm start`, health check `/health`, Node.js 24 e `NODE_ENV=production`.
+4. Use a URL HTTPS fornecida pelo Render, como `https://<seu-servico>.onrender.com`. O Render define `PORT`; não fixe essa variável no painel.
+
+O plano gratuito pode suspender o serviço por inatividade. A primeira chamada após a suspensão pode demorar e ultrapassar o tempo de espera de um assistente de voz. Consulte as cotas e condições atuais do Render.
+`/health` confirma que a aplicação está ativa, sem depender de uma chamada ao TudoGostoso.
+
+## Como testar os endpoints
+
+```sh
+BASE_URL=http://localhost:3000
+# Para testar no Render, substitua pelo endereço HTTPS publicado.
+curl -i "$BASE_URL/health"
+curl -i "$BASE_URL/search/bolo%20de%20cenoura"
+# Use um id retornado pela busca:
+curl -i "$BASE_URL/recipe/23-bolo-de-cenoura"
+curl -i "$BASE_URL/search/zzzxxyyqqnaoexiste123456"
+curl -i "$BASE_URL/recipe/999999999999-inexistente"
+```
+
+`GET /health` retorna HTTP 200 com `{"status":"ok"}`. Os endpoints de busca e receita mantêm seus formatos de sucesso abaixo.
+Erros retornam `{"error":"descrição"}`: 400 para busca sem resultados ou parâmetros inválidos,
+404 para receita não encontrada pelo site, 502 para falha HTTP/rede ou HTML não reconhecido,
+504 para timeout (15 segundos) e 500 para exceção inesperada. A busca retorna no máximo dez receitas;
+não ter dez resultados não é um erro. Falhas não geram receitas fictícias.
+
+## URL no Echo Home
+
+Na configuração da integração de receitas do seu projeto Echo Home, substitua a URL base anterior
+pela URL HTTPS pública do Render, sem acrescentar `/health`, `/search` ou `/recipe`.
+Mantenha as chamadas `GET <URL_BASE>/search/<nome codificado com encodeURIComponent>` e
+`GET <URL_BASE>/recipe/<id retornado pela busca>`. Teste `/health` e uma busca antes de usar a voz.
+Não configure API Key. Este repositório não contém o código nem a interface de configuração do Echo Home;
+o nome exato do campo ou variável deve ser consultado nesse projeto. Se estiver usando uma skill Alexa,
+esta API fornece dados HTTP e precisa ser chamada pelo backend da skill; sua URL não implementa diretamente o protocolo de uma skill.
 
 ## Variáveis de ambiente
 
@@ -18,7 +64,23 @@ PORT = 3000 # se não estiver definida, considera o valor 3000
 
 ## Testes de integração
 
-A implementar.
+`npm test` executa testes HTTP locais, de tratamento de falhas e do parser.
+Os HTMLs em `test/fixtures` são recortes de páginas reais obtidas em 04/11/2026,
+sem imagens e SVGs; os testes não acessam a internet.
+
+Nessa data, foram verificadas a busca por `bolo`, uma busca sem resultados, as receitas
+`23-bolo-de-cenoura` e `119737-bolo-de-banana-rapido-de-liquidificador`, e uma receita inexistente (HTTP 404).
+Os seletores antigos `.recipe-card`, `.ingredients-card` e `.instructions` não apareceram
+nessas páginas. O scraper agora reconhece `.news-card-listing a.news-card-link`,
+`.recipe-ingredients-item-label` e `.recipe-steps-item`, preservando o suporte ao HTML antigo.
+Seções de ingredientes, passos e informações adicionais são mantidas. Favoritos só são retornados
+quando presentes no HTML reconhecido; não são estimados. Alterações futuras do site ou bloqueios
+podem causar erro 502 e exigem nova inspeção.
+
+Validação de ponta a ponta local realizada com `npm start`: `/health` (200),
+`/search/bolo` (200, dez receitas), `/recipe/23-bolo-de-cenoura` (200),
+busca sem resultados (400) e receita inexistente (404). Deploy no Render e integração
+no Echo Home não foram executados neste ambiente.
 
 ## Referência da API
 
